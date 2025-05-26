@@ -31,7 +31,7 @@ from llava.llava_agent import LLavaAgent
 from ui_helpers import printt
 
 # Environment configuration
-LOADING_MODE = os.getenv("LOADING_MODE", "FP16")
+LOADING_MODE = os.getenv("LOADING_MODE", "fp16")  # Force fp16 for consistency
 TILED_VAE = os.getenv("TILED_VAE", "True").lower() == "true"
 AUTO_MOVE_CPU = os.getenv("AUTO_MOVE_CPU", "True").lower() == "true"
 
@@ -137,12 +137,27 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         
         # Create model
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        printt(f"Creating SUPIR model with config: {config_path}, weight_dtype: {weight_dtype}, device: {device}, ckpt: {ckpt_path}")
+        
+        # Map sampler names to full module paths
+        sampler_mapping = {
+            "DPMPP2M": "sgm.modules.diffusionmodules.sampling.RestoreDPMPP2MSampler",
+            "DDIM": "sgm.modules.diffusionmodules.sampling.DDIMSampler",
+            "DPM": "sgm.modules.diffusionmodules.sampling.DPMSampler"
+        }
+        
+        # Get the full sampler path, default to the original config if not found
+        sampler_target = sampler_mapping.get("DPMPP2M", "sgm.modules.diffusionmodules.sampling.RestoreDPMPP2MSampler")
+        
         supir_model = create_SUPIR_model(
             config_path=config_path,
             weight_dtype=weight_dtype,
             device=device,
-            ckpt=ckpt_path
+            ckpt=ckpt_path,
+            sampler=sampler_target
         )
+        
+        printt(f"SUPIR model created successfully")
         
         # Initialize tiled VAE if enabled
         if TILED_VAE:
@@ -163,11 +178,25 @@ def load_llava_model():
     
     try:
         printt("Loading LLaVA model")
-        llava_agent = LLavaAgent()
+        
+        # LLaVA model path
+        llava_model_path = os.path.join(MODELS_DIR, "llava-v1.5-7b")
+        
+        if not os.path.exists(llava_model_path):
+            printt(f"LLaVA model not found at: {llava_model_path}")
+            return False
+        
+        printt(f"Loading LLaVA from: {llava_model_path}")
+        llava_agent = LLavaAgent(
+            model_path=llava_model_path,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            conv_mode='vicuna_v1'
+        )
         printt("LLaVA model loaded successfully")
         return True
     except Exception as e:
         printt(f"Error loading LLaVA model: {str(e)}")
+        printt(traceback.format_exc())
         return False
 
 # Job processing functions
@@ -238,12 +267,24 @@ async def process_job(job_id: str, image_path: str, settings: JobSettings):
                 img_array = upscale_image(img_array, settings.upscale_size)
             
             # Convert to tensor
-            img_tensor, h0, w0 = PIL2Tensor(Image.fromarray(img_array), upscale=1)
-            img_tensor = img_tensor.unsqueeze(0)
+            printt(f"Converting image to tensor, img_array shape: {img_array.shape}")
+            pil_image = Image.fromarray(img_array)
+            printt(f"PIL image size: {pil_image.size}")
             
-            # Move to device
+            tensor_result = PIL2Tensor(pil_image, upscale=1)
+            printt(f"PIL2Tensor returned: {type(tensor_result)}, length: {len(tensor_result) if hasattr(tensor_result, '__len__') else 'N/A'}")
+            
+            img_tensor, h0, w0 = tensor_result
+            img_tensor = img_tensor.unsqueeze(0)
+            printt(f"Tensor shape: {img_tensor.shape}, h0: {h0}, w0: {w0}")
+            
+            # Move to device and ensure consistent dtype
             device = next(supir_model.parameters()).device
-            img_tensor = img_tensor.to(device)
+            model_dtype = next(supir_model.parameters()).dtype
+            printt(f"Model device: {device}, Model dtype: {model_dtype}")
+            printt(f"Input tensor dtype before conversion: {img_tensor.dtype}")
+            img_tensor = img_tensor.to(device=device, dtype=model_dtype)
+            printt(f"Input tensor dtype after conversion: {img_tensor.dtype}")
             
             # Prepare prompt
             if settings.prompt:

@@ -29,57 +29,76 @@ def load_state_dict(ckpt_path, location='cpu'):
 
 
 def create_SUPIR_model(config_path, weight_dtype='bf16', supir_sign=None, device='cpu', ckpt=None, sampler="DPMPP2M"):
-    # Load the model configuration
-    config = OmegaConf.load(config_path)
-    config.model.params.sampler_config.target = sampler
-    if ckpt:
-        config.SDXL_CKPT = ckpt
+    try:
+        printt(f"Step 1: Loading config from {config_path}")
+        # Load the model configuration
+        config = OmegaConf.load(config_path)
+        printt(f"Step 2: Config loaded successfully")
+        
+        config.model.params.sampler_config.target = sampler
+        if ckpt:
+            config.SDXL_CKPT = ckpt
+        printt(f"Step 3: Config updated with ckpt: {ckpt}")
 
-    weight_dtype_conversion = {
-        'first_stage_model': None,
-        'alphas_cumprod': None,
-        '': convert_dtype(weight_dtype),
-    }   
-    # Instantiate model from config
-    printt(f'Loading model from [{config_path}]')
-    if shared.opts.fast_load_sd:
-        with sd_model_initialization.DisableInitialization(disable_clip=False):
-            with sd_model_initialization.InitializeOnMeta():    
-                model = instantiate_from_config(config.model)
-    else:
-        model = instantiate_from_config(config.model)
-
-    printt(f'Loaded model from [{config_path}]')
-
-    # Function to load state dict to the chosen device
-    def load_to_device(checkpoint_path):
-        printt(f'Loading state_dict from [{checkpoint_path}]')
-        if checkpoint_path and os.path.exists(checkpoint_path):
-            if torch.cuda.is_available():
-                tgt_device = 'cuda'
-            else:
-                tgt_device = 'cpu'
-            state_dict = load_state_dict(checkpoint_path, tgt_device)
-            with sd_model_initialization.LoadStateDictOnMeta(state_dict, device=model.device, weight_dtype_conversion=weight_dtype_conversion):
-                models_utils.load_model_weights(model, state_dict)  
-            torch_gc()            
-            printt(f'Loaded state_dict from [{checkpoint_path}]')
+        weight_dtype_conversion = {
+            'first_stage_model': None,
+            'alphas_cumprod': None,
+            '': convert_dtype(weight_dtype),
+        }   
+        printt(f"Step 4: Weight dtype conversion prepared")
+        
+        # Instantiate model from config
+        printt(f'Step 5: Loading model from [{config_path}]')
+        printt(f"fast_load_sd setting: {shared.opts.fast_load_sd}")
+        
+        if shared.opts.fast_load_sd:
+            printt("Using fast load path")
+            with sd_model_initialization.DisableInitialization(disable_clip=False):
+                with sd_model_initialization.InitializeOnMeta():    
+                    model = instantiate_from_config(config.model)
         else:
-            printt(f'No checkpoint found at [{checkpoint_path}]')
+            printt("Using standard load path")
+            model = instantiate_from_config(config.model)
+        
+        printt(f"Step 6: Model instantiated successfully")
+        printt(f'Loaded model from [{config_path}]')
 
-    # Load state dicts as needed
-    load_to_device(config.get('SDXL_CKPT'))
+        # Function to load state dict to the chosen device
+        def load_to_device(checkpoint_path):
+            printt(f'Loading state_dict from [{checkpoint_path}]')
+            if checkpoint_path and os.path.exists(checkpoint_path):
+                if torch.cuda.is_available():
+                    tgt_device = 'cuda'
+                else:
+                    tgt_device = 'cpu'
+                state_dict = load_state_dict(checkpoint_path, tgt_device)
+                with sd_model_initialization.LoadStateDictOnMeta(state_dict, device=model.device, weight_dtype_conversion=weight_dtype_conversion):
+                    models_utils.load_model_weights(model, state_dict)  
+                torch_gc()            
+                printt(f'Loaded state_dict from [{checkpoint_path}]')
+            else:
+                printt(f'No checkpoint found at [{checkpoint_path}]')
 
-    # Handling SUPIR checkpoints based on the sign
-    if supir_sign:
-        assert supir_sign in ['F', 'Q'], "supir_sign must be either 'F' or 'Q'"
-        ckpt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models", f"v0{supir_sign}.ckpt"))
-        load_to_device(ckpt_path)
+        # Load state dicts as needed
+        load_to_device(config.get('SDXL_CKPT'))
 
-    model.sampler = sampler
-    printt(f'Loaded model config from [{config_path}] and moved to {device}')
+        # Handling SUPIR checkpoints based on the sign
+        if supir_sign:
+            assert supir_sign in ['F', 'Q'], "supir_sign must be either 'F' or 'Q'"
+            ckpt_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models", f"v0{supir_sign}.ckpt"))
+            load_to_device(ckpt_path)
 
-    return model
+        model.sampler = sampler
+        printt(f'Loaded model config from [{config_path}] and moved to {device}')
+
+        return model
+    
+    except Exception as e:
+        printt(f"Error in create_SUPIR_model: {str(e)}")
+        printt(f"Error type: {type(e)}")
+        import traceback
+        printt(f"Traceback: {traceback.format_exc()}")
+        raise e
 
 
 def PIL2Tensor(img, upscale=1, min_size=1024, do_fix_resize=None):
