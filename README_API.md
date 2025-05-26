@@ -160,7 +160,7 @@ python api_server.py
 
 ## RunPod Deployment
 
-This API is optimized for RunPod deployment:
+This API is optimized for RunPod deployment with network storage:
 
 1. **Build and push your Docker image:**
 ```bash
@@ -171,12 +171,20 @@ docker push your-registry/supir-api
 2. **Create a RunPod template:**
    - Use your Docker image
    - Set environment variables (especially `API_TOKEN`)
-   - Mount network storage to `/runpod-volume` for models
+   - Mount network storage to `/workspace` (the entire workspace directory)
    - Expose port 8000
 
 3. **Network Storage Setup:**
-   - Upload your SUPIR models to RunPod network storage
-   - The startup script will automatically link them to `/workspace/models`
+   - Upload your SUPIR models to RunPod network storage at `/workspace/models`
+   - The entire workspace directory is network-mounted, so models and outputs persist across runs
+   - Place your model files (e.g., `RealVisXL_V5.0_fp16.safetensors`) directly in `/workspace/models/`
+   - Processed images will be saved to `/workspace/adjustedupscaled/`
+
+4. **Required Models:**
+   - Download and place the following in `/workspace/models/`:
+     - `RealVisXL_V5.0_fp16.safetensors` (default model)
+     - Any other SUPIR-compatible models you want to use
+   - LLaVA models will be downloaded automatically on first use
 
 ## Usage Examples
 

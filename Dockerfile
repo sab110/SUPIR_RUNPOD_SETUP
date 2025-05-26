@@ -60,12 +60,27 @@ RUN chmod +x /workspace/api_server.py
 
 # Create a startup script for RunPod
 RUN echo '#!/bin/bash\n\
-# Check if models directory is mounted and has models\n\
-if [ -d "/runpod-volume" ] && [ "$(ls -A /runpod-volume 2>/dev/null)" ]; then\n\
-    echo "Network storage detected, linking models..."\n\
-    ln -sf /runpod-volume/* /workspace/models/ 2>/dev/null || true\n\
-    export MODELS_DIR=/runpod-volume\n\
+# RunPod network storage setup\n\
+# The workspace directory itself is network-mounted, so models should be in /workspace/models\n\
+echo "Setting up RunPod environment..."\n\
+\n\
+# Ensure models directory exists in the network-mounted workspace\n\
+mkdir -p /workspace/models\n\
+mkdir -p /workspace/adjusted\n\
+mkdir -p /workspace/adjustedupscaled\n\
+mkdir -p /workspace/outputs\n\
+\n\
+# Check if models exist in the network storage\n\
+if [ -d "/workspace/models" ] && [ "$(ls -A /workspace/models 2>/dev/null)" ]; then\n\
+    echo "Models found in network storage: /workspace/models"\n\
+    ls -la /workspace/models/\n\
+else\n\
+    echo "No models found in /workspace/models - please upload models to network storage"\n\
 fi\n\
+\n\
+# Set environment variables for network storage\n\
+export MODELS_DIR=/workspace/models\n\
+export WORKSPACE_DIR=/workspace\n\
 \n\
 # Start the API server\n\
 cd /workspace\n\

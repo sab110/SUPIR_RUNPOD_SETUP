@@ -15,6 +15,7 @@ services:
     volumes:
       - ./models:/workspace/models
       - ./outputs:/workspace/adjustedupscaled
+      - ./adjusted:/workspace/adjusted
       - ./temp:/tmp
     deploy:
       resources:
