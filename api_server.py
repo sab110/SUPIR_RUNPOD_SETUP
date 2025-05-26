@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import uuid
 import tempfile
 import shutil
@@ -9,6 +10,11 @@ from enum import Enum
 import json
 import traceback
 from pathlib import Path
+
+# Add current directory to Python path for SUPIR modules
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, BackgroundTasks, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -57,7 +63,7 @@ class JobSettings(BaseModel):
     apply_llava: bool = Field(default=True, description="Apply LLaVa caption generation")
     apply_supir: bool = Field(default=True, description="Apply SUPIR upscaling")
     prompt_style: str = Field(default="Photorealistic", description="Prompt style")
-    model: str = Field(default="RealVisXL_V5.0_fp16.safetensors", description="Model checkpoint")
+    model: str = Field(default="v0F.ckpt", description="Model checkpoint")
     checkpoint_type: str = Field(default="Standard SDXL", description="Checkpoint type")
     prompt: str = Field(default="", description="Custom prompt")
     save_captions: bool = Field(default=True, description="Save generated captions")
