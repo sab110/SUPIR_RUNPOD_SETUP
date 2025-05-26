@@ -130,9 +130,12 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         if weight_dtype not in ['fp16', 'fp32', 'bf16']:
             weight_dtype = 'fp16'
         
-        # Force fp16 to avoid mixed precision issues
-        if weight_dtype == 'bf16':
-            weight_dtype = 'fp16'
+        # CRITICAL: SUPIR explicitly rejects fp16 for VAE because it causes NaN
+        # Use bf16 for VAE and fp16 for diffusion as designed
+        ae_dtype = 'bf16'  # VAE must use bf16 to avoid NaN corruption
+        diffusion_dtype = 'fp16'  # Diffusion can use fp16
+        
+        printt(f"Using ae_dtype: {ae_dtype}, diffusion_dtype: {diffusion_dtype}")
         
         # Model checkpoint path
         ckpt_path = os.path.join(MODELS_DIR, model_name)
@@ -142,7 +145,7 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         # Create model
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         printt(f"CUDA available: {torch.cuda.is_available()}")
-        printt(f"Creating SUPIR model with config: {config_path}, weight_dtype: {weight_dtype}, device: {device}, ckpt: {ckpt_path}")
+        printt(f"Creating SUPIR model with config: {config_path}, ae_dtype: {ae_dtype}, diffusion_dtype: {diffusion_dtype}, device: {device}, ckpt: {ckpt_path}")
         
         # Map sampler names to full module paths
         sampler_mapping = {
@@ -156,7 +159,7 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         
         supir_model = create_SUPIR_model(
             config_path=config_path,
-            weight_dtype='fp16',  # Force fp16 for consistency
+            weight_dtype=ae_dtype,  # This becomes ae_dtype in the model
             device=device,
             ckpt=ckpt_path,
             sampler=sampler_target
@@ -206,6 +209,18 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         # The model uses mixed precision by design (bf16 for AE, fp16 for diffusion)
         # This is intentional and should not be changed
         printt(f"Model loaded with mixed precision: ae_dtype={supir_model.ae_dtype}, diffusion_dtype={supir_model.model.dtype}")
+        
+        # Test VAE encode/decode to verify it's working
+        printt("Testing VAE encode/decode...")
+        try:
+            with torch.no_grad():
+                test_tensor = torch.randn(1, 3, 64, 64, device=device, dtype=torch.float32)
+                encoded = supir_model.encode_first_stage(test_tensor)
+                decoded = supir_model.decode_first_stage(encoded)
+                printt(f"VAE test successful - input range: [{test_tensor.min():.3f}, {test_tensor.max():.3f}], output range: [{decoded.min():.3f}, {decoded.max():.3f}]")
+        except Exception as e:
+            printt(f"VAE test failed: {str(e)}")
+            raise e
         
         printt(f"SUPIR model loaded successfully")
         return True
@@ -380,44 +395,18 @@ async def process_job(job_id: str, image_path: str, settings: JobSettings):
                 printt(f"Result tensor mean: {result[0].mean().item()}")
                 printt(f"Result tensor std: {result[0].std().item()}")
                 
-                # Get the result tensor
-                result_tensor = result[0].clone()
-                
                 # Check for NaN or Inf values
-                if torch.isnan(result_tensor).any():
-                    printt("WARNING: NaN values detected in result tensor!")
-                    result_tensor = torch.nan_to_num(result_tensor, nan=0.0)
+                if torch.isnan(result[0]).any():
+                    printt("ERROR: NaN values detected in result tensor!")
+                    raise Exception("NaN values in result tensor")
                 
-                if torch.isinf(result_tensor).any():
-                    printt("WARNING: Inf values detected in result tensor!")
-                    result_tensor = torch.nan_to_num(result_tensor, posinf=1.0, neginf=-1.0)
+                if torch.isinf(result[0]).any():
+                    printt("ERROR: Inf values detected in result tensor!")
+                    raise Exception("Inf values in result tensor")
                 
-                # The SUPIR VAE decoder should output values in [-1, 1] range
-                # But sometimes it might output in a different range due to precision issues
-                tensor_min = result_tensor.min().item()
-                tensor_max = result_tensor.max().item()
-                
-                # If the tensor is clearly outside the expected range, normalize it
-                if tensor_min < -2.0 or tensor_max > 2.0:
-                    printt(f"Tensor values are outside expected range [{tensor_min}, {tensor_max}], normalizing...")
-                    # Normalize to [-1, 1] range
-                    result_tensor = 2.0 * (result_tensor - tensor_min) / (tensor_max - tensor_min) - 1.0
-                elif tensor_min >= 0 and tensor_max <= 1.0:
-                    printt("Tensor appears to be in [0, 1] range, converting to [-1, 1]")
-                    result_tensor = result_tensor * 2.0 - 1.0
-                elif tensor_min >= 0 and tensor_max > 1.0 and tensor_max <= 255.0:
-                    printt("Tensor appears to be in [0, 255] range, converting to [-1, 1]")
-                    result_tensor = (result_tensor / 255.0) * 2.0 - 1.0
-                else:
-                    # Clamp to [-1, 1] range to be safe
-                    printt(f"Tensor range [{tensor_min}, {tensor_max}], clamping to [-1, 1]")
-                    result_tensor = torch.clamp(result_tensor, -1.0, 1.0)
-                
-                printt(f"Final tensor min: {result_tensor.min().item()}")
-                printt(f"Final tensor max: {result_tensor.max().item()}")
-                
-                # Convert back to PIL
-                result_image = Tensor2PIL(result_tensor, h0, w0)
+                printt("Converting tensor to PIL image...")
+                # Convert back to PIL using the original function
+                result_image = Tensor2PIL(result[0], h0, w0)
                 
                 # Save result
                 output_path = os.path.join(BATCH_OUTPUT_DIR, f"{job_id}_result.png")
