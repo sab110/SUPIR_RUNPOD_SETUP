@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  supir-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LOADING_MODE=FP16
+      - TILED_VAE=True
+      - AUTO_MOVE_CPU=True
+      - API_TOKEN=your-secret-token-here
+      - WORKSPACE_DIR=/workspace
+      - MODELS_DIR=/workspace/models
+    volumes:
+      - ./models:/workspace/models
+      - ./outputs:/workspace/adjustedupscaled
+      - ./temp:/tmp
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s 
