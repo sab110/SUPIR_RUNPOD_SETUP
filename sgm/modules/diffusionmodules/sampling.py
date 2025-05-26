@@ -569,8 +569,15 @@ class RestoreDPMPP2MSampler(DPMPP2MSampler):
         noise_sampler = BrownianTreeNoiseSampler(x, sigmas_min, sigmas_max)
 
         old_denoised = None
-        progress = gr.Progress(track_tqdm=True)
-        for _idx, i in progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling"):
+        try:
+            import gradio as gr
+            progress = gr.Progress(track_tqdm=True)
+            sigma_gen = progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling")
+        except:
+            # Fallback if Gradio is not available or in API mode
+            sigma_gen = enumerate(self.get_sigma_gen(num_sigmas))
+        
+        for i in self.get_sigma_gen(num_sigmas):
             if is_cancelled():
                 printt("Process cancelled, aborting RestoreDPMPP2MSampler sampling at step", i)
                 return None
@@ -664,8 +671,15 @@ class RestoreEDMSampler(SingleStepDiffusionSampler):
             x, cond, uc, num_steps
         )
 
-        progress = gr.Progress(track_tqdm=True)
-        for _idx, i in progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling"):
+        try:
+            import gradio as gr
+            progress = gr.Progress(track_tqdm=True)
+            sigma_gen = progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling")
+        except:
+            # Fallback if Gradio is not available or in API mode
+            sigma_gen = enumerate(self.get_sigma_gen(num_sigmas))
+        
+        for i in self.get_sigma_gen(num_sigmas):
             if is_cancelled():
                 printt("Process cancelled, aborting EDM sampling at step", i)
                 return None
@@ -722,8 +736,15 @@ class TiledRestoreEDMSampler(RestoreEDMSampler):
             x, cond, uc, num_steps
         )
 
-        progress = gr.Progress(track_tqdm=True)
-        for _idx, i in progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling"):
+        try:
+            import gradio as gr
+            progress = gr.Progress(track_tqdm=True)
+            sigma_gen = progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling")
+        except:
+            # Fallback if Gradio is not available or in API mode
+            sigma_gen = enumerate(self.get_sigma_gen(num_sigmas))
+        
+        for i in self.get_sigma_gen(num_sigmas):
             if is_cancelled():
                 printt("Process cancelled, aborting tiled sampling at step", i)
                 return None
@@ -808,8 +829,15 @@ class TiledRestoreDPMPP2MSampler(RestoreDPMPP2MSampler):
         noise_sampler = BrownianTreeNoiseSampler(x, sigmas_min, sigmas_max)
 
         old_denoised = None
-        progress = gr.Progress(track_tqdm=True)
-        for _idx, i in progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling"):
+        try:
+            import gradio as gr
+            progress = gr.Progress(track_tqdm=True)
+            sigma_gen = progress.tqdm(enumerate(self.get_sigma_gen(num_sigmas)), total=num_sigmas, desc="Sampling")
+        except:
+            # Fallback if Gradio is not available or in API mode
+            sigma_gen = enumerate(self.get_sigma_gen(num_sigmas))
+        
+        for i in self.get_sigma_gen(num_sigmas):
             if is_cancelled():
                 printt("Process cancelled, aborting sampling at step", i)
                 return None

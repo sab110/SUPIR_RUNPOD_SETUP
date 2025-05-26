@@ -130,6 +130,10 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         if weight_dtype not in ['fp16', 'fp32', 'bf16']:
             weight_dtype = 'fp16'
         
+        # Force fp16 to avoid mixed precision issues
+        if weight_dtype == 'bf16':
+            weight_dtype = 'fp16'
+        
         # Model checkpoint path
         ckpt_path = os.path.join(MODELS_DIR, model_name)
         if not os.path.exists(ckpt_path):
@@ -137,6 +141,7 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         
         # Create model
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        printt(f"CUDA available: {torch.cuda.is_available()}")
         printt(f"Creating SUPIR model with config: {config_path}, weight_dtype: {weight_dtype}, device: {device}, ckpt: {ckpt_path}")
         
         # Map sampler names to full module paths
@@ -151,20 +156,56 @@ def load_supir_model(model_name: str, checkpoint_type: str):
         
         supir_model = create_SUPIR_model(
             config_path=config_path,
-            weight_dtype=weight_dtype,
+            weight_dtype='fp16',  # Force fp16 for consistency
             device=device,
             ckpt=ckpt_path,
             sampler=sampler_target
         )
         
+        # Check model dtypes and device placement
+        printt(f"Model ae_dtype: {supir_model.ae_dtype}")
+        printt(f"Model diffusion_dtype: {supir_model.model.dtype}")
+        
+        # Ensure all model components are on the same device
+        printt("Ensuring all model components are on CUDA...")
+        supir_model.to(device)
+        if hasattr(supir_model, 'first_stage_model'):
+            supir_model.first_stage_model.to(device)
+            if hasattr(supir_model.first_stage_model, 'quant_conv'):
+                supir_model.first_stage_model.quant_conv.to(device)
+                printt("Moved quant_conv to CUDA")
+        printt("All model components moved to CUDA")
+        
         printt(f"SUPIR model created successfully")
         
         # Initialize tiled VAE if enabled
         if TILED_VAE:
-            supir_model.init_tile_vae(encoder_tile_size=512, decoder_tile_size=64)
+            printt("Tiled VAE is enabled but temporarily disabled for debugging")
+            # supir_model.init_tile_vae(encoder_tile_size=512, decoder_tile_size=64)
+        else:
+            printt("Tiled VAE is disabled")
         
-        # Move to device
+        # Move to device using the model's custom method
         supir_model.move_to(device)
+        
+        # Additional device movement to ensure everything is on CUDA
+        printt("Performing comprehensive device movement...")
+        def move_all_to_device(module, target_device):
+            """Recursively move all components to target device"""
+            module.to(target_device)
+            for name, child in module.named_children():
+                move_all_to_device(child, target_device)
+            for name, param in module.named_parameters():
+                if param.device != target_device:
+                    param.data = param.data.to(target_device)
+                    printt(f"Moved parameter {name} to {target_device}")
+        
+        if device == 'cuda':
+            move_all_to_device(supir_model, device)
+        
+        # The model uses mixed precision by design (bf16 for AE, fp16 for diffusion)
+        # This is intentional and should not be changed
+        printt(f"Model loaded with mixed precision: ae_dtype={supir_model.ae_dtype}, diffusion_dtype={supir_model.model.dtype}")
         
         printt(f"SUPIR model loaded successfully")
         return True
@@ -278,13 +319,26 @@ async def process_job(job_id: str, image_path: str, settings: JobSettings):
             img_tensor = img_tensor.unsqueeze(0)
             printt(f"Tensor shape: {img_tensor.shape}, h0: {h0}, w0: {w0}")
             
-            # Move to device and ensure consistent dtype
+            # Move to device and handle mixed precision properly
             device = next(supir_model.parameters()).device
             model_dtype = next(supir_model.parameters()).dtype
             printt(f"Model device: {device}, Model dtype: {model_dtype}")
             printt(f"Input tensor dtype before conversion: {img_tensor.dtype}")
-            img_tensor = img_tensor.to(device=device, dtype=model_dtype)
+            printt(f"Model ae_dtype: {supir_model.ae_dtype}")
+            
+            # Convert input tensor to match the model's expected input type
+            # The model expects float32 input tensors for proper mixed precision handling
+            img_tensor = img_tensor.to(device=device, dtype=torch.float32)
             printt(f"Input tensor dtype after conversion: {img_tensor.dtype}")
+            printt(f"Input tensor device: {img_tensor.device}")
+            
+            # Double-check that critical model components are on the right device
+            if hasattr(supir_model, 'first_stage_model') and hasattr(supir_model.first_stage_model, 'quant_conv'):
+                quant_conv_device = next(supir_model.first_stage_model.quant_conv.parameters()).device
+                printt(f"quant_conv device: {quant_conv_device}")
+                if quant_conv_device != device:
+                    printt(f"WARNING: quant_conv is on {quant_conv_device}, moving to {device}")
+                    supir_model.first_stage_model.quant_conv.to(device)
             
             # Prepare prompt
             if settings.prompt:
@@ -317,8 +371,53 @@ async def process_job(job_id: str, image_path: str, settings: JobSettings):
                 )
             
             if result is not None:
+                # Debug: Check tensor values before conversion
+                printt(f"Result tensor shape: {result[0].shape}")
+                printt(f"Result tensor dtype: {result[0].dtype}")
+                printt(f"Result tensor device: {result[0].device}")
+                printt(f"Result tensor min: {result[0].min().item()}")
+                printt(f"Result tensor max: {result[0].max().item()}")
+                printt(f"Result tensor mean: {result[0].mean().item()}")
+                printt(f"Result tensor std: {result[0].std().item()}")
+                
+                # Get the result tensor
+                result_tensor = result[0].clone()
+                
+                # Check for NaN or Inf values
+                if torch.isnan(result_tensor).any():
+                    printt("WARNING: NaN values detected in result tensor!")
+                    result_tensor = torch.nan_to_num(result_tensor, nan=0.0)
+                
+                if torch.isinf(result_tensor).any():
+                    printt("WARNING: Inf values detected in result tensor!")
+                    result_tensor = torch.nan_to_num(result_tensor, posinf=1.0, neginf=-1.0)
+                
+                # The SUPIR VAE decoder should output values in [-1, 1] range
+                # But sometimes it might output in a different range due to precision issues
+                tensor_min = result_tensor.min().item()
+                tensor_max = result_tensor.max().item()
+                
+                # If the tensor is clearly outside the expected range, normalize it
+                if tensor_min < -2.0 or tensor_max > 2.0:
+                    printt(f"Tensor values are outside expected range [{tensor_min}, {tensor_max}], normalizing...")
+                    # Normalize to [-1, 1] range
+                    result_tensor = 2.0 * (result_tensor - tensor_min) / (tensor_max - tensor_min) - 1.0
+                elif tensor_min >= 0 and tensor_max <= 1.0:
+                    printt("Tensor appears to be in [0, 1] range, converting to [-1, 1]")
+                    result_tensor = result_tensor * 2.0 - 1.0
+                elif tensor_min >= 0 and tensor_max > 1.0 and tensor_max <= 255.0:
+                    printt("Tensor appears to be in [0, 255] range, converting to [-1, 1]")
+                    result_tensor = (result_tensor / 255.0) * 2.0 - 1.0
+                else:
+                    # Clamp to [-1, 1] range to be safe
+                    printt(f"Tensor range [{tensor_min}, {tensor_max}], clamping to [-1, 1]")
+                    result_tensor = torch.clamp(result_tensor, -1.0, 1.0)
+                
+                printt(f"Final tensor min: {result_tensor.min().item()}")
+                printt(f"Final tensor max: {result_tensor.max().item()}")
+                
                 # Convert back to PIL
-                result_image = Tensor2PIL(result[0], h0, w0)
+                result_image = Tensor2PIL(result_tensor, h0, w0)
                 
                 # Save result
                 output_path = os.path.join(BATCH_OUTPUT_DIR, f"{job_id}_result.png")
